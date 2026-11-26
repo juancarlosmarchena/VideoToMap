@@ -16,13 +16,14 @@ export const onSensors = (fn) => (listeners.add(fn), () => listeners.delete(fn))
 
 /** Debe llamarse desde un gesto del usuario (iOS pide permiso explícito). */
 export async function enableSensors() {
-  const results = [];
-  for (const Ev of [window.DeviceOrientationEvent, window.DeviceMotionEvent]) {
-    if (Ev && typeof Ev.requestPermission === 'function') {
-      try { results.push(await Ev.requestPermission()); } catch (e) { results.push('denied'); }
-    }
+  // iOS: ambas peticiones deben lanzarse en el mismo gesto, sin await intermedio.
+  const reqs = [window.DeviceOrientationEvent, window.DeviceMotionEvent]
+    .filter((Ev) => Ev && typeof Ev.requestPermission === 'function')
+    .map((Ev) => Ev.requestPermission().catch(() => 'denied'));
+  const results = await Promise.all(reqs);
+  if (results[0] === 'denied') {
+    throw new Error('Permiso de brújula denegado. En iPhone: cierra Safari del todo y vuelve a abrir la página para que lo pida otra vez.');
   }
-  if (results.includes('denied')) throw new Error('Permiso de sensores denegado.');
   startOrientation();
   startMotion();
   return sensors;
