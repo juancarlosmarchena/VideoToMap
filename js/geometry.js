@@ -202,3 +202,84 @@ export function sunComment(facadeHeading, lat) {
     : 'Sol de tarde; puede calentarse en verano.';
   return 'Poco sol directo: fachada fresca y luz difusa.';
 }
+
+/**
+ * Divide un recorrido continuo (rumbo registrado en cada paso) en paredes.
+ * Se detecta una esquina cuando el rumbo se desvía más de `turn` grados de la
+ * media de la pared actual durante `confirm` pasos seguidos.
+ * @param {number[]} stepHeadings rumbo en cada paso
+ * @returns {{heading:number, steps:number}[]}
+ */
+export function segmentWalk(stepHeadings, { turn = 45, confirm = 2, minSteps = 2 } = {}) {
+  if (!stepHeadings.length) return [];
+  const segs = [];
+  let cur = { hs: [stepHeadings[0]], steps: 1 };
+  let pending = [];
+  for (const h of stepHeadings.slice(1)) {
+    const m = circularMean(cur.hs);
+    if (Math.abs(angleDiff(h, m)) > turn) {
+      // ¿el giro es coherente con los pasos pendientes?
+      if (pending.length && Math.abs(angleDiff(h, circularMean(pending))) > turn) {
+        cur.steps += pending.length; pending = [];
+      }
+      pending.push(h);
+      if (pending.length >= confirm) {
+        segs.push(cur);
+        cur = { hs: pending, steps: pending.length };
+        pending = [];
+      }
+    } else {
+      cur.steps += pending.length; // pasos sueltos durante el giro
+      pending = [];
+      cur.hs.push(h);
+      cur.steps++;
+    }
+  }
+  cur.steps += pending.length;
+  segs.push(cur);
+
+  // rumbo de cada pared sin los primeros pasos (aún girando)
+  let out = segs.map((s) => ({ heading: circularMean(s.hs.length > confirm + 2 ? s.hs.slice(confirm) : s.hs), steps: s.steps }));
+  // tramos demasiado cortos → se suman al anterior
+  out = out.reduce((acc, s) => {
+    if (s.steps < minSteps && acc.length) acc[acc.length - 1].steps += s.steps;
+    else acc.push({ ...s });
+    return acc;
+  }, []);
+  // fusionar tramos consecutivos con el mismo rumbo
+  out = out.reduce((acc, s) => {
+    const last = acc[acc.length - 1];
+    if (last && Math.abs(angleDiff(s.heading, last.heading)) <= turn) {
+      last.heading = circularMean([last.heading, s.heading], [last.steps, s.steps]);
+      last.steps += s.steps;
+    } else acc.push({ ...s });
+    return acc;
+  }, []);
+  // si se empezó a mitad de pared, el último tramo continúa el primero
+  if (out.length >= 4 && Math.abs(angleDiff(out[0].heading, out.at(-1).heading)) <= turn) {
+    const l = out.pop();
+    out[0].heading = circularMean([out[0].heading, l.heading], [out[0].steps, l.steps]);
+    out[0].steps += l.steps;
+  }
+  return out;
+}
+
+/** Desplaza las paredes de un polígono cerrado `d` metros hacia fuera. */
+export function offsetPolygon(pts, d) {
+  if (pts.length < 3 || !d) return pts;
+  const E = edges(pts);
+  const lines = E.map((e) => {
+    const n = vec(e.outward, d);
+    return { p: { x: e.a.x + n.x, y: e.a.y + n.y }, u: vec(e.heading, 1) };
+  });
+  const cross = (a, b) => a.x * b.y - a.y * b.x;
+  const out = lines.map((L, i) => {
+    const P = lines[(i - 1 + lines.length) % lines.length];
+    const den = cross(P.u, L.u);
+    if (Math.abs(den) < 1e-6) return L.p;
+    const s = cross({ x: L.p.x - P.p.x, y: L.p.y - P.p.y }, L.u) / den;
+    return { x: P.p.x + P.u.x * s, y: P.p.y + P.u.y * s };
+  });
+  const o = out[0];
+  return out.map((p) => ({ x: p.x - o.x, y: p.y - o.y }));
+}

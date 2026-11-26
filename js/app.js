@@ -2,6 +2,7 @@ import * as G from './geometry.js';
 import { sensors, onSensors, enableSensors, setManualHeading, addSimulatedStep, getPosition, reverseGeocode } from './sensors.js';
 import { openCamera, stopCamera, startRecording, stopRecording, snapshot } from './camera.js';
 import { arSupported, captureAR } from './ar.js';
+import { playTutorial } from './tutorial.js';
 import { PlanView, planSVG, roomPreviewSVG, roomArea, totalArea, worldPoints } from './plan.js';
 
 const $ = (s) => document.querySelector(s);
@@ -12,13 +13,17 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 // ---------- Estado ----------
 const defaults = () => ({
   name: 'Mi vivienda', address: '', location: null, facade: null, rooms: [], facadeManual: [],
-  settings: { stepLength: 0.7, compassCorrection: 0 },
+  settings: { stepLength: 0.7, compassCorrection: 0, wallInset: 0.35 },
 });
 let project = load();
 const videos = new Map(); // roomId → Blob (solo en memoria)
 
 function load() {
-  try { return { ...defaults(), ...JSON.parse(localStorage.getItem(KEY)) }; } catch { return defaults(); }
+  try {
+    const p = { ...defaults(), ...JSON.parse(localStorage.getItem(KEY)) };
+    p.settings = { ...defaults().settings, ...p.settings };
+    return p;
+  } catch { return defaults(); }
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(project)); }
@@ -61,6 +66,8 @@ onSensors((s) => {
 
 $('#set-step').value = project.settings.stepLength;
 $('#set-corr').value = project.settings.compassCorrection;
+$('#set-inset').value = project.settings.wallInset;
+$('#set-inset').addEventListener('change', (e) => { project.settings.wallInset = Math.max(0, +e.target.value || 0); save(); });
 $('#set-step').addEventListener('change', (e) => { project.settings.stepLength = +e.target.value || 0.7; save(); });
 $('#set-corr').addEventListener('change', (e) => { project.settings.compassCorrection = +e.target.value || 0; sensors.correction = project.settings.compassCorrection; save(); });
 $('#btn-calc-step').addEventListener('click', () => {
@@ -149,6 +156,7 @@ function renderFacade() {
 
 // ---------- 3. Estancias: captura ----------
 const HELP = {
+  auto: 'Graba un único vídeo dando la vuelta a la estancia pegado a las paredes, con la cámara mirando hacia donde caminas. No hay que pulsar nada en las esquinas: se detectan solas por el giro de la brújula, y la longitud sale de tus pasos.',
   steps: 'Empieza en una esquina. Apunta la cámara a lo largo de la pared y camina pegado a ella hasta la siguiente esquina; pulsa «Esquina» en cada rincón. La brújula da la dirección y el podómetro la longitud.',
   tape: 'Igual que el anterior, pero escribes la longitud de cada pared medida con cinta o medidor láser antes de pulsar «Esquina». Es el método más preciso sin AR.',
   ar: 'Usa la cámara en realidad aumentada (Chrome Android con ARCore). Apunta al suelo junto a cada esquina y pulsa «Marcar esquina»; la medida es real en metros.',
@@ -159,6 +167,24 @@ $('#room-method').addEventListener('change', updateHelp);
 updateHelp();
 arSupported().then((ok) => { if (!ok) $('#room-method option[value=ar]').textContent += ' — no disponible en este dispositivo'; });
 
+// ---------- Tutorial ----------
+let stopTut = null, tutGo = null, tutShown = false;
+function openTutorial(onGo) {
+  tutGo = onGo || null;
+  $('#btn-tutorial-go').textContent = onGo ? 'Entendido, ¡a grabar!' : 'Entendido';
+  $('#tutorial-hide').checked = localStorage.getItem('videotomap.tutorialSeen') === '1';
+  $('#tutorial').hidden = false;
+  stopTut = playTutorial($('#tutorial-canvas'));
+}
+function closeTutorial(go) {
+  stopTut?.(); $('#tutorial').hidden = true;
+  localStorage.setItem('videotomap.tutorialSeen', $('#tutorial-hide').checked ? '1' : '0');
+  if (go && tutGo) tutGo();
+}
+$('#btn-tutorial').addEventListener('click', () => openTutorial());
+$('#btn-tutorial-close').addEventListener('click', () => closeTutorial(false));
+$('#btn-tutorial-go').addEventListener('click', () => closeTutorial(true));
+
 let cap = null; // captura en curso
 let editing = null; // {room, isNew}
 
@@ -166,11 +192,25 @@ onSensors((s) => {
   if (!cap) return;
   $('#cap-heading').textContent = fmtH(s.heading);
   if (cap.wall && s.heading != null) cap.wall.samples.push(s.heading);
+  if (cap.method === 'auto' && cap.started) {
+    const now = performance.now();
+    if (s.heading != null) cap.hbuf.push({ h: s.heading, t: now });
+    while (cap.hbuf.length > 1 && now - cap.hbuf[0].t > 700) cap.hbuf.shift();
+    while (cap.lastSteps < s.steps) {
+      cap.lastSteps++;
+      const h = G.circularMean(cap.hbuf.map((x) => x.h));
+      if (h != null) cap.stepLog.push(h);
+    }
+  }
   updateCapHUD();
 });
 
 $('#btn-room-start').addEventListener('click', async () => {
   const method = $('#room-method').value;
+  if (method === 'auto' && localStorage.getItem('videotomap.tutorialSeen') !== '1' && !tutShown) {
+    tutShown = true; // una vez por sesión
+    return openTutorial(() => $('#btn-room-start').click());
+  }
   const name = $('#room-name').value.trim() || `Estancia ${project.rooms.length + 1}`;
   if (method === 'manual') {
     return openEditor({ id: uid(), name, method, rawWalls: [{ heading: 0, length: 4 }, { heading: 90, length: 3 }, { heading: 180, length: 4 }, { heading: 270, length: 3 }], options: { square: true, autoClose: false } }, true);
@@ -178,17 +218,41 @@ $('#btn-room-start').addEventListener('click', async () => {
   if (method === 'ar') return startAR(name);
   if (!sensors.orientationOn) { try { await enableSensors(); } catch (e) { toast(e.message); } }
   try { await openCamera($('#capture-video')); } catch (e) { return toast(e.message); }
-  cap = { name, method, walls: [], wall: null, recording: startRecording() };
+  cap = { name, method, walls: [], wall: null, recording: method === 'auto' ? false : startRecording(), started: false, stepLog: [], hbuf: [], lastSteps: sensors.steps };
   $('#rec-dot').hidden = !cap.recording;
   $('#new-room').hidden = true; $('#capture').hidden = false; $('#editor').hidden = true;
   $('#tape-row').hidden = method !== 'tape';
-  $('#btn-cap-step').hidden = method !== 'steps';
-  $('#btn-cap-corner').textContent = '📍 Estoy en la esquina inicial';
+  $('#btn-cap-step').hidden = method === 'tape';
+  $('#btn-cap-undo').hidden = method === 'auto';
+  $('#btn-cap-corner').hidden = false;
+  $('#cap-live').hidden = method !== 'auto';
+  $('#btn-cap-corner').textContent = method === 'auto' ? '⏺ Grabar' : '📍 Estoy en la esquina inicial';
+  $('#btn-cap-finish').textContent = method === 'auto' ? '⏹ Terminar' : '✔ Terminar';
   updateCapHUD();
 });
 
+function autoSegments() {
+  return G.segmentWalk(cap.stepLog).map((w) => ({ heading: w.heading, length: w.steps * project.settings.stepLength }));
+}
 function updateCapHUD() {
   if (!cap) return;
+  if (cap.method === 'auto') {
+    const n = cap.stepLog.length;
+    $('#cap-steps').textContent = cap.started ? `👣 ${n} pasos ≈ ${(n * project.settings.stepLength).toFixed(1)} m` : '';
+    if (!cap.started) {
+      $('#cap-instr').textContent = 'Ponte en una esquina, móvil vertical y cámara mirando a lo largo de la pared. Pulsa ⏺ Grabar y empieza a caminar.';
+      $('#cap-walls').innerHTML = '';
+      $('#cap-live').innerHTML = '';
+      return;
+    }
+    const segs = autoSegments();
+    $('#cap-instr').textContent = `Camina pegado a la pared y gira en cada esquina. Paredes detectadas: ${segs.length}. Al volver a la esquina inicial, pulsa ⏹ Terminar.`;
+    $('#cap-walls').innerHTML = segs.map((w) => `<li>${fmtH(w.heading)} · ${w.length.toFixed(2)} m</li>`).join('');
+    const raw = [{ x: 0, y: 0 }];
+    cap.stepLog.forEach((h) => { const v = G.vec(h, project.settings.stepLength), p = raw.at(-1); raw.push({ x: p.x + v.x, y: p.y + v.y }); });
+    $('#cap-live').innerHTML = roomPreviewSVG([], raw);
+    return;
+  }
   const L = project.settings.stepLength;
   const st = cap.wall ? sensors.steps - cap.wall.steps0 : 0;
   $('#cap-steps').textContent = cap.method === 'steps' && cap.wall ? `${st} pasos ≈ ${(st * L).toFixed(2)} m` : '';
@@ -200,6 +264,18 @@ function updateCapHUD() {
 
 $('#btn-cap-corner').addEventListener('click', () => {
   if (!cap) return;
+  if (cap.method === 'auto') {
+    if (cap.started) return;
+    cap.started = true;
+    cap.lastSteps = sensors.steps;
+    cap.recording = startRecording();
+    $('#rec-dot').hidden = !cap.recording;
+    $('#btn-cap-corner').hidden = true;
+    navigator.vibrate?.(40);
+    if (!sensors.motionOn || sensors.heading == null) toast('⚠ No llegan datos de brújula/pasos: activa los sensores.');
+    updateCapHUD();
+    return;
+  }
   if (cap.wall) {
     const w = cap.wall;
     let heading = G.circularMean(w.samples.slice(Math.floor(w.samples.length * 0.15))) ?? sensors.heading;
@@ -236,17 +312,22 @@ $('#btn-cap-finish').addEventListener('click', async () => {
   if (cap.wall && cap.walls.length && (sensors.steps - cap.wall.steps0 > 0 || cap.method === 'tape' && $('#tape-length').value)) {
     $('#btn-cap-corner').click(); // cerrar la pared en curso
   }
+  if (cap.method === 'auto') {
+    cap.walls = autoSegments();
+    if (cap.stepLog.length < 4) toast('Se detectaron muy pocos pasos. Revisa las longitudes en la tabla.', 5000);
+  }
   const blob = await stopRecording();
   stopCamera();
   const c = cap; cap = null;
   $('#capture').hidden = true;
-  if (c.walls.length < 2) { $('#new-room').hidden = false; return toast('Se necesitan al menos 2 paredes.'); }
+  if (c.walls.length < 2) {
+    $('#cap-live').hidden = true; $('#new-room').hidden = false; return toast('Se necesitan al menos 2 paredes.'); }
   const id = uid();
   if (blob) videos.set(id, blob);
   // Si faltan una o más paredes por recorrer, sugerir el cierre automático.
   const e = c.walls.reduce((a, w) => { const v = G.vec(w.heading, w.length); return { x: a.x + v.x, y: a.y + v.y }; }, { x: 0, y: 0 });
   const per = c.walls.reduce((a, w) => a + w.length, 0);
-  openEditor({ id, name: c.name, method: c.method, rawWalls: c.walls.map(({ heading, length }) => ({ heading, length })), options: { square: true, autoClose: Math.hypot(e.x, e.y) > per * 0.2 } }, true);
+  openEditor({ id, name: c.name, method: c.method, rawWalls: c.walls.map(({ heading, length }) => ({ heading, length })), options: { square: true, autoClose: Math.hypot(e.x, e.y) > per * 0.2 }, inset: c.method === 'tape' ? 0 : project.settings.wallInset }, true);
 });
 
 async function startAR(name) {
@@ -268,6 +349,7 @@ function openEditor(room, isNew) {
   $('#ed-title').textContent = room.name;
   $('#ed-square').checked = !!room.options?.square;
   $('#ed-autoclose').checked = !!room.options?.autoClose;
+  $('#ed-inset').value = room.inset || 0;
   renderEditor();
   $('#editor').scrollIntoView({ behavior: 'smooth' });
 }
@@ -281,7 +363,10 @@ function renderEditor() {
   updatePreview();
 }
 function computeRoom(r) {
-  return G.closeRoom(r.rawWalls, { square: $('#ed-square').checked, autoClose: $('#ed-autoclose').checked });
+  const res = G.closeRoom(r.rawWalls, { square: $('#ed-square').checked, autoClose: $('#ed-autoclose').checked });
+  r.inset = Math.max(0, parseFloat($('#ed-inset').value) || 0);
+  if (res.valid && r.inset) res.points = G.offsetPolygon(res.points, r.inset);
+  return res;
 }
 function updatePreview() {
   const r = editing.room, res = computeRoom(r);
@@ -313,6 +398,7 @@ $('#btn-ed-add').addEventListener('click', () => {
 });
 $('#ed-square').addEventListener('change', updatePreview);
 $('#ed-autoclose').addEventListener('change', updatePreview);
+$('#ed-inset').addEventListener('input', updatePreview);
 $('#btn-ed-cancel').addEventListener('click', () => {
   if (editing?.isNew) videos.delete(editing.room.id);
   editing = null; $('#editor').hidden = true; $('#new-room').hidden = false;
@@ -359,7 +445,7 @@ function renderRooms() {
   if (!project.rooms.length) { list.innerHTML = '<p class="hint">Todavía no hay estancias. Captura la primera abajo.</p>'; return; }
   list.innerHTML = project.rooms.map((r) => `<div class="room-card">
       ${roomPreviewSVG(r.points)}
-      <div class="meta"><b>${r.name.replace(/</g, '&lt;')}</b><br>${roomArea(r).toFixed(2)} m² · ${r.points.length} paredes<br><small>${({ steps: 'Vídeo + pasos', tape: 'Vídeo + cinta', ar: 'AR', manual: 'Manual' })[r.method] || ''}</small>
+      <div class="meta"><b>${r.name.replace(/</g, '&lt;')}</b><br>${roomArea(r).toFixed(2)} m² · ${r.points.length} paredes<br><small>${({ steps: 'Vídeo + pasos', tape: 'Vídeo + cinta', ar: 'AR', manual: 'Manual', auto: 'Vídeo continuo' })[r.method] || ''}</small>
         <div class="acts">
           <button class="btn small" data-edit="${r.id}">Editar</button>
           ${videos.has(r.id) ? `<button class="btn small" data-video="${r.id}">⬇ Vídeo</button>` : ''}
@@ -423,6 +509,7 @@ $$('#room-panel [data-rot]').forEach((b) => b.addEventListener('click', () => {
   r.points = G.rotatePoints(r.points, +b.dataset.rot);
   r.rawWalls = G.wallsFromPoints(r.points);
   r.options = { square: false, autoClose: false };
+  r.inset = 0;
   save(); view.render(); renderSummary();
 }));
 $('#rp-delete').addEventListener('click', () => {

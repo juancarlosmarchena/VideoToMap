@@ -7,8 +7,9 @@ Aplicación web (PWA) para **levantar el plano 2D aproximado de una vivienda o l
 - 🎥 **Captura de estancias con la cámara**, con tres métodos:
   | Método | Cómo funciona | Precisión |
   |---|---|---|
-  | Vídeo + brújula + pasos | Recorres cada pared apuntando la cámara a lo largo de ella; la brújula da la dirección y el podómetro la longitud. Se graba vídeo. | Orientativa (±10 %) |
-  | Vídeo + brújula + cinta | Igual, pero escribes la longitud medida con cinta o láser. | Buena |
+  | **Vídeo continuo (recomendado)** | Grabas un único vídeo dando la vuelta a la estancia pegado a las paredes. Las esquinas se detectan solas por el giro de la brújula y las longitudes salen de los pasos. Antes de grabar se muestra un tutorial animado ([ver vídeo](docs/tutorial.mp4)). | Orientativa (±10 %) |
+  | Vídeo + pasos | Recorres cada pared apuntando la cámara a lo largo de ella; la brújula da la dirección y el podómetro la longitud. Se graba vídeo. | Orientativa (±10 %) |
+  | Vídeo + cinta | Igual, pero escribes la longitud medida con cinta o láser. | Buena |
   | Realidad aumentada (WebXR) | Marcas cada esquina sobre el suelo en la cámara; mide en metros reales (Chrome Android con ARCore). | Muy buena (±2–5 cm) |
   | Manual | Introduces rumbos y longitudes. | La que introduzcas |
 - 📏 **Corrección automática**: cierre del polígono (regla de Bowditch), escuadrado a 90° respecto al eje dominante, cierre automático de la última pared y alineación con el eje del resto de la vivienda.
@@ -25,7 +26,7 @@ Aplicación web (PWA) para **levantar el plano 2D aproximado de una vivienda o l
 5. **Estancias** → pon un nombre, elige el método y sigue las instrucciones en pantalla. Revisa la tabla de paredes y guarda.
 6. **Plano** → encaja las estancias, añade puertas/ventanas y exporta.
 
-Consejos: calibra la longitud de paso en ⚙️ Ajustes (con tu altura o midiendo 10 pasos), mantén el móvil lejos de objetos metálicos y, si la brújula marca un error constante, ajusta la corrección/declinación magnética (en la península ibérica es de ~0–1°, despreciable).
+Consejos: en los métodos que caminas pegado a la pared se suma automáticamente la separación cuerpo-pared (0,35 m, ajustable); calibra la longitud de paso en ⚙️ Ajustes (con tu altura o midiendo 10 pasos), mantén el móvil lejos de objetos metálicos y, si la brújula marca un error constante, ajusta la corrección/declinación magnética (en la península ibérica es de ~0–1°, despreciable).
 
 ## Publicarla (GitHub Pages)
 

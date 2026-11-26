@@ -63,3 +63,32 @@ test('rotatePoints: girar +d suma d al rumbo de las paredes', () => {
   const r = G.rotatePoints(pts, 10, { x: 0, y: 0 });
   near(G.wallsFromPoints(r)[0].heading, 10, 1e-6);
 });
+
+test('segmentWalk: detecta 4 paredes con ruido y giros', () => {
+  const walk = [];
+  const noise = (i) => ((i * 37) % 11) - 5; // ±5°
+  for (let i = 0; i < 7; i++) walk.push(G.norm360(0 + noise(i)));
+  walk.push(40); // paso durante el giro
+  for (let i = 0; i < 5; i++) walk.push(90 + noise(i));
+  walk.push(300); // lectura espuria aislada
+  for (let i = 0; i < 2; i++) walk.push(90 + noise(i));
+  for (let i = 0; i < 7; i++) walk.push(180 + noise(i));
+  for (let i = 0; i < 5; i++) walk.push(270 + noise(i));
+  const s = G.closeRoom(G.segmentWalk(walk).map((w) => ({ heading: w.heading, length: w.steps * 0.7 })), { square: true });
+  assert.equal(s.walls.length, 4);
+  const segs = G.segmentWalk(walk);
+  assert.deepEqual(segs.map((x) => x.steps), [8, 8, 7, 5]);
+});
+
+test('segmentWalk: empezar a mitad de pared une el primer y el último tramo', () => {
+  const walk = [...Array(3).fill(0), ...Array(5).fill(90), ...Array(6).fill(180), ...Array(5).fill(270), ...Array(3).fill(0)];
+  const segs = G.segmentWalk(walk);
+  assert.equal(segs.length, 4);
+  assert.equal(segs[0].steps, 6);
+});
+
+test('offsetPolygon: 2x2 desplazado 0,5 m → 3x3', () => {
+  const sq = [{ x: 0, y: 0 }, { x: 0, y: 2 }, { x: 2, y: 2 }, { x: 2, y: 0 }];
+  near(G.polygonArea(G.offsetPolygon(sq, 0.5)), 9, 1e-9);
+  near(G.polygonArea(G.offsetPolygon([...sq].reverse(), 0.5)), 9, 1e-9);
+});
