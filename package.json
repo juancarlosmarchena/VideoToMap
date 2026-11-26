@@ -1,0 +1,11 @@
+{
+  "name": "videotomap",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PWA para levantar el plano 2D de una vivienda o local con la cámara, la brújula y el GPS del móvil",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "start": "python3 -m http.server 8080"
+  }
+}

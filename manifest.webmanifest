@@ -1,0 +1,11 @@
+{
+  "name": "VideoToMap – Plano 2D desde la cámara",
+  "short_name": "VideoToMap",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f7fb",
+  "theme_color": "#1d4ed8",
+  "lang": "es",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

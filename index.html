@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1d4ed8">
+  <title>VideoToMap · Plano 2D desde la cámara</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">📐 <strong>VideoToMap</strong></div>
+    <input id="project-name" class="project-name" aria-label="Nombre del proyecto">
+    <button id="btn-sensors" class="btn small">Activar sensores</button>
+  </header>
+  <div id="sensor-bar" class="sensor-bar">Sensores inactivos</div>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="ubicacion" class="active">1 · Ubicación</button>
+    <button role="tab" data-tab="fachada">2 · Fachada</button>
+    <button role="tab" data-tab="estancias">3 · Estancias</button>
+    <button role="tab" data-tab="plano">4 · Plano</button>
+  </nav>
+
+  <main>
+    <!-- 1. UBICACIÓN -->
+    <section id="tab-ubicacion" class="tab active">
+      <h2>Ubicación aproximada</h2>
+      <p class="hint">Sitúate en la entrada o frente a la fachada para mayor precisión.</p>
+      <div class="row">
+        <button id="btn-locate" class="btn primary">📍 Obtener mi ubicación</button>
+        <button id="btn-geocode" class="btn" disabled>🏠 Buscar dirección</button>
+      </div>
+      <div id="loc-info" class="card muted">Sin ubicación todavía.</div>
+      <label>Dirección / referencia catastral
+        <input id="address" placeholder="Calle, número, piso, ciudad…">
+      </label>
+      <div id="map-wrap" class="map-wrap" hidden><iframe id="map" title="Mapa" loading="lazy"></iframe></div>
+    </section>
+
+    <!-- 2. FACHADA -->
+    <section id="tab-fachada" class="tab">
+      <h2>Orientación de la fachada</h2>
+      <p class="hint">Colócate en la calle, de frente a la fachada principal, y apunta la cámara de forma perpendicular a ella. Mantén el móvil vertical y lejos de objetos metálicos.</p>
+      <div class="cam">
+        <video id="facade-video" playsinline muted></video>
+        <div class="crosshair"></div>
+        <div class="cam-hud"><span id="facade-live">— °</span></div>
+      </div>
+      <div class="row">
+        <button id="btn-facade-cam" class="btn">📷 Abrir cámara</button>
+        <button id="btn-facade-capture" class="btn primary">🧭 Capturar orientación</button>
+      </div>
+      <details>
+        <summary>Introducir orientación manualmente</summary>
+        <div class="row">
+          <label>Rumbo hacia el que mira la fachada (°)
+            <input id="facade-manual" type="number" min="0" max="359" step="1" placeholder="180 = Sur">
+          </label>
+          <button id="btn-facade-manual" class="btn">Guardar</button>
+        </div>
+      </details>
+      <div id="facade-result" class="card muted">Sin orientación registrada.</div>
+    </section>
+
+    <!-- 3. ESTANCIAS -->
+    <section id="tab-estancias" class="tab">
+      <h2>Estancias</h2>
+      <div id="room-list" class="room-list"></div>
+
+      <div id="new-room" class="card">
+        <h3>Nueva estancia</h3>
+        <label>Nombre <input id="room-name" value="Salón"></label>
+        <label>Método de captura
+          <select id="room-method">
+            <option value="steps">🎥 Vídeo + brújula + pasos (cualquier móvil)</option>
+            <option value="tape">🎥 Vídeo + brújula + cinta métrica (más preciso)</option>
+            <option value="ar">🕶️ Realidad aumentada: medir esquinas en el suelo (Android)</option>
+            <option value="manual">⌨️ Manual (rumbos y longitudes)</option>
+          </select>
+        </label>
+        <p id="method-help" class="hint"></p>
+        <button id="btn-room-start" class="btn primary">▶ Empezar</button>
+      </div>
+
+      <!-- Captura con cámara -->
+      <div id="capture" class="capture" hidden>
+        <div class="cam tall">
+          <video id="capture-video" playsinline muted></video>
+          <div class="crosshair"></div>
+          <div class="cam-hud top">
+            <span id="rec-dot" class="rec" hidden>● REC</span>
+            <span id="cap-heading">— °</span>
+            <span id="cap-steps"></span>
+          </div>
+          <div id="cap-instr" class="cam-instr"></div>
+        </div>
+        <div id="tape-row" class="row" hidden>
+          <label>Longitud medida de esta pared (m)
+            <input id="tape-length" type="number" step="0.01" min="0" inputmode="decimal">
+          </label>
+        </div>
+        <div class="row wrap">
+          <button id="btn-cap-corner" class="btn primary big">📍 Estoy en la esquina inicial</button>
+          <button id="btn-cap-step" class="btn small" title="Sumar un paso si el podómetro no lo detecta">+1 paso</button>
+          <button id="btn-cap-undo" class="btn">↶ Deshacer</button>
+          <button id="btn-cap-finish" class="btn">✔ Terminar</button>
+          <button id="btn-cap-cancel" class="btn danger">✖ Cancelar</button>
+        </div>
+        <ol id="cap-walls" class="cap-walls"></ol>
+      </div>
+
+      <!-- Editor de estancia -->
+      <div id="editor" class="card" hidden>
+        <h3>Revisar estancia: <span id="ed-title"></span></h3>
+        <p class="hint">Corrige rumbos o longitudes si hace falta. La línea roja discontinua es el recorrido bruto; el polígono azul, el resultado cerrado.</p>
+        <div class="editor-grid">
+          <div>
+            <table class="walls">
+              <thead><tr><th>#</th><th>Rumbo (°)</th><th>Long. (m)</th><th></th></tr></thead>
+              <tbody id="ed-walls"></tbody>
+            </table>
+            <div class="row wrap">
+              <button id="btn-ed-add" class="btn small">+ Pared (giro 90°)</button>
+              <label class="check"><input id="ed-square" type="checkbox" checked> Escuadrar (ángulos rectos)</label>
+              <label class="check"><input id="ed-autoclose" type="checkbox"> Cerrar automáticamente la última pared</label>
+            </div>
+            <div id="ed-stats" class="card muted"></div>
+          </div>
+          <div id="ed-preview" class="preview"></div>
+        </div>
+        <div class="row">
+          <button id="btn-ed-save" class="btn primary">💾 Guardar estancia</button>
+          <button id="btn-ed-cancel" class="btn">Descartar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. PLANO -->
+    <section id="tab-plano" class="tab">
+      <h2>Plano 2D</h2>
+      <div class="toolbar" id="tools">
+        <button data-tool="move" class="btn small active">✋ Mover</button>
+        <button data-tool="door" class="btn small">🚪 Puerta</button>
+        <button data-tool="window" class="btn small">🪟 Ventana</button>
+        <button data-tool="facade" class="btn small">🧱 Fachada</button>
+        <button data-tool="delete" class="btn small">🗑️ Borrar hueco</button>
+      </div>
+      <p id="tool-help" class="hint">Arrastra las estancias para encajarlas (se imantan por las esquinas). Toca una para seleccionarla.</p>
+      <div id="plan" class="plan"></div>
+      <div id="room-panel" class="card" hidden>
+        <div class="row wrap">
+          <label>Estancia <input id="rp-name"></label>
+          <button data-rot="-90" class="btn small">⟲ 90°</button>
+          <button data-rot="-2" class="btn small">⟲ 2°</button>
+          <button data-rot="2" class="btn small">⟳ 2°</button>
+          <button data-rot="90" class="btn small">⟳ 90°</button>
+          <button id="rp-delete" class="btn small danger">Eliminar</button>
+        </div>
+      </div>
+      <div id="plan-summary" class="card muted"></div>
+      <div class="row wrap">
+        <button id="btn-exp-svg" class="btn">⬇ SVG</button>
+        <button id="btn-exp-png" class="btn">⬇ PNG</button>
+        <button id="btn-exp-json" class="btn">⬇ Proyecto (.json)</button>
+        <label class="btn">⬆ Abrir proyecto<input id="inp-json" type="file" accept="application/json,.json" hidden></label>
+        <button id="btn-print" class="btn">🖨 Imprimir / PDF</button>
+        <button id="btn-share" class="btn">📤 Compartir</button>
+      </div>
+    </section>
+
+    <details class="settings">
+      <summary>⚙️ Ajustes</summary>
+      <label>Longitud de paso (m) <input id="set-step" type="number" step="0.01" min="0.3" max="1.2"></label>
+      <div class="row">
+        <label>Tu altura (cm) <input id="set-height" type="number" min="100" max="230" placeholder="170"></label>
+        <button id="btn-calc-step" class="btn small">Calcular paso</button>
+      </div>
+      <label>Corrección de brújula / declinación magnética (°) <input id="set-corr" type="number" step="0.5"></label>
+      <label>Rumbo simulado (sin sensores, para pruebas) <input id="set-sim" type="range" min="0" max="359" value="0"></label>
+      <button id="btn-reset" class="btn danger small">Borrar proyecto</button>
+    </details>
+  </main>
+
+  <!-- Capa para la sesión AR (dom-overlay) -->
+  <div id="ar-overlay" class="ar-overlay" hidden>
+    <div class="ar-cross"></div>
+    <div id="ar-info" class="ar-info">Iniciando AR…</div>
+    <div class="ar-buttons">
+      <button id="ar-mark" class="btn primary big">➕ Marcar esquina</button>
+      <button id="ar-undo" class="btn">↶</button>
+      <button id="ar-done" class="btn">✔ Terminar</button>
+      <button id="ar-cancel" class="btn danger">✖</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
